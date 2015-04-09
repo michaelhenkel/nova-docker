@@ -103,6 +103,7 @@ class DockerDriver(driver.ComputeDriver):
                 _('Docker daemon is not running or is not reachable'
                   ' (check the rights on /var/run/docker.sock)'))
 
+
     def _is_daemon_running(self):
         return self.docker.ping()
 
@@ -207,9 +208,35 @@ class DockerDriver(driver.ComputeDriver):
             'ln', '-sf', '/proc/{0}/ns/net'.format(nspid),
             '/var/run/netns/{0}'.format(container_id),
             run_as_root=True)
-
+        vif_ns_array = []
         for vif in network_info:
+            print 'vif: %s' % vif
             self.vif_driver.attach(instance, vif, container_id)
+            vif_ns_array.append('ns%s' % vif['id'][:8])
+
+        cmd = '/bin/sh -c "echo 2    {1} >> /etc/iproute2/rt_tables"'.format(container_id,vif_ns_array[0])
+        self.docker.execute(container_id,cmd) 
+        cmd = '/bin/sh -c "echo 3    {1} >> /etc/iproute2/rt_tables"'.format(container_id,vif_ns_array[1])
+        self.docker.execute(container_id,cmd) 
+
+        cmd = 'ip rule add iif {1} lookup {2}'.format(container_id,vif_ns_array[0], vif_ns_array[1])
+        self.docker.execute(container_id,cmd) 
+        cmd = 'ip rule add iif {1} lookup {2}'.format(container_id,vif_ns_array[1], vif_ns_array[0])
+        self.docker.execute(container_id,cmd) 
+
+        cmd = 'umount /etc/resolv.conf'
+        self.docker.execute(container_id,cmd) 
+
+
+        cmd = '/bin/sh -c "ip link set {0} up"'.format(vif_ns_array[0])
+        self.docker.execute(container_id,cmd) 
+        cmd = '/bin/sh -c "dhclient {0}"'.format(vif_ns_array[0])
+        self.docker.execute(container_id,cmd) 
+
+        cmd = '/bin/sh -c "ip link set {0} up"'.format(vif_ns_array[1])
+        self.docker.execute(container_id,cmd) 
+        cmd = '/bin/sh -c "dhclient {0}"'.format(vif_ns_array[1])
+        self.docker.execute(container_id,cmd) 
 
     def unplug_vifs(self, instance, network_info):
         """Unplug VIFs from networks."""
@@ -360,7 +387,7 @@ class DockerDriver(driver.ComputeDriver):
         return self.docker.inspect_image(self._encode_utf8(image_meta['name']))
 
     def _start_container(self, container_id, instance, network_info=None):
-        self.docker.start(container_id)
+        self.docker.start(container_id,cap_add=['NET_ADMIN','SYS_ADMIN'])
         if not network_info:
             return
         try:
@@ -394,7 +421,6 @@ class DockerDriver(driver.ComputeDriver):
         if (image_meta and
                 image_meta.get('properties', {}).get('os_command_line')):
             args['command'] = image_meta['properties'].get('os_command_line')
-
         container_id = self._create_container(instance, image_name, args)
         if not container_id:
             raise exception.InstanceDeployFailure(

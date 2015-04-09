@@ -17,6 +17,7 @@ from nova.i18n import _
 from nova.network import linux_net
 from nova import utils
 from oslo_log import log as logging
+import time
 
 LOG = logging.getLogger(__name__)
 
@@ -80,6 +81,8 @@ class OpenContrailVIFDriver(object):
             utils.execute('ip', 'link', 'set', if_remote_name, 'netns',
                           container_id, run_as_root=True)
 
+            print '************** sleep for 5 ***********************'
+            time.sleep(5)
             result = self._vrouter_client.add_port(
                 instance['uuid'], vif['id'],
                 if_local_name, vif['address'], **params)
@@ -95,8 +98,8 @@ class OpenContrailVIFDriver(object):
 
         # TODO(NetNS): attempt DHCP client; fallback to manual config if the
         # container doesn't have an working dhcpclient
-        utils.execute('ip', 'netns', 'exec', container_id, 'dhclient',
-                      if_remote_name, run_as_root=True)
+        #utils.execute('ip', 'netns', 'exec', container_id, 'dhclient',
+        #              if_remote_name, run_as_root=True)
 
     def unplug(self, instance, vif):
         try:
