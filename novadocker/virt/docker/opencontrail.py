@@ -16,15 +16,53 @@ from contrail_vrouter_api.vrouter_api import ContrailVRouterApi
 from nova.i18n import _
 from nova.network import linux_net
 from nova import utils
+from oslo.config import cfg
 from oslo_log import log as logging
+from oslo.utils import importutils
+from novadocker.virt.docker import client as docker_client
 import time
 
 LOG = logging.getLogger(__name__)
+
+CONF = cfg.CONF
+
+docker_opts = [
+    cfg.StrOpt('host_url',
+               default='unix:///var/run/docker.sock',
+               help='tcp://host:port to bind/connect to or '
+                    'unix://path/to/socket to use'),
+    cfg.BoolOpt('api_insecure',
+                default=False,
+                help='If set, ignore any SSL validation issues'),
+    cfg.StrOpt('ca_file',
+               help='Location of CA certificates file for '
+                    'securing docker api requests (tlscacert).'),
+    cfg.StrOpt('cert_file',
+               help='Location of TLS certificate file for '
+                    'securing docker api requests (tlscert).'),
+    cfg.StrOpt('key_file',
+               help='Location of TLS private key file for '
+                    'securing docker api requests (tlskey).'),
+    cfg.StrOpt('vif_driver',
+               default='novadocker.virt.docker.vifs.DockerGenericVIFDriver'),
+    cfg.StrOpt('snapshots_directory',
+               default='$instances_path/snapshots',
+               help='Location where docker driver will temporarily store '
+                    'snapshots.')
+]
+
+
+CONF.register_opts(docker_opts, 'docker')
+
 
 
 class OpenContrailVIFDriver(object):
     def __init__(self):
         self._vrouter_client = ContrailVRouterApi(doconnect=True)
+        self._docker=None
+        #vif_class = importutils.import_class(CONF.docker.vif_driver)
+        #self.vif_driver = vif_class()
+        self.docker = docker_client.DockerHTTPClient(CONF.docker.host_url)
 
     def plug(self, instance, vif):
         if_local_name = 'veth%s' % vif['id'][:8]
@@ -49,9 +87,10 @@ class OpenContrailVIFDriver(object):
             msg = _('Failed to setup the network, rolling back')
             undo_mgr.rollback_and_reraise(msg=msg, instance=instance)
 
-    def attach(self, instance, vif, container_id):
+    def attach(self, instance, vif, container_id, vif_counter):
         if_local_name = 'veth%s' % vif['id'][:8]
         if_remote_name = 'ns%s' % vif['id'][:8]
+        if_remote_rename = 'eth%s' % vif_counter
 
         undo_mgr = utils.UndoManager()
         ipv4_address = '0.0.0.0'
@@ -81,16 +120,31 @@ class OpenContrailVIFDriver(object):
             utils.execute('ip', 'link', 'set', if_remote_name, 'netns',
                           container_id, run_as_root=True)
 
-            print '************** sleep for 5 ***********************'
-            time.sleep(5)
+
+            print '************** sleep for 10 ***********************'
+            time.sleep(10)
             result = self._vrouter_client.add_port(
                 instance['uuid'], vif['id'],
                 if_local_name, vif['address'], **params)
             if not result:
                 # follow the exception path
                 raise RuntimeError('add_port returned %s' % str(result))
+
             utils.execute('ip', 'link', 'set', if_local_name, 'up',
                           run_as_root=True)
+
+            cmd = 'ip link set dev {0} name {1}'.format(if_remote_name,if_remote_rename)
+            print cmd
+            self.docker.execute(container_id,cmd)
+
+            cmd = 'ip link set dev {0} up'.format(if_remote_rename)
+            print cmd
+            self.docker.execute(container_id,cmd)
+
+            cmd = '/bin/sh -c "dhclient {0}"'.format(if_remote_rename)
+            print cmd
+            self.docker.execute(container_id,cmd)
+
         except Exception:
             LOG.exception("Failed to attach the network")
             msg = _('Failed to attach the network, rolling back')
@@ -100,6 +154,7 @@ class OpenContrailVIFDriver(object):
         # container doesn't have an working dhcpclient
         #utils.execute('ip', 'netns', 'exec', container_id, 'dhclient',
         #              if_remote_name, run_as_root=True)
+
 
     def unplug(self, instance, vif):
         try:

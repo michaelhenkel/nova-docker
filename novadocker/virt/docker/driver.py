@@ -209,34 +209,11 @@ class DockerDriver(driver.ComputeDriver):
             '/var/run/netns/{0}'.format(container_id),
             run_as_root=True)
         vif_ns_array = []
+        vif_counter = 0
         for vif in network_info:
-            print 'vif: %s' % vif
-            self.vif_driver.attach(instance, vif, container_id)
-            vif_ns_array.append('ns%s' % vif['id'][:8])
-
-        cmd = '/bin/sh -c "echo 2    {1} >> /etc/iproute2/rt_tables"'.format(container_id,vif_ns_array[0])
-        self.docker.execute(container_id,cmd) 
-        cmd = '/bin/sh -c "echo 3    {1} >> /etc/iproute2/rt_tables"'.format(container_id,vif_ns_array[1])
-        self.docker.execute(container_id,cmd) 
-
-        cmd = 'ip rule add iif {1} lookup {2}'.format(container_id,vif_ns_array[0], vif_ns_array[1])
-        self.docker.execute(container_id,cmd) 
-        cmd = 'ip rule add iif {1} lookup {2}'.format(container_id,vif_ns_array[1], vif_ns_array[0])
-        self.docker.execute(container_id,cmd) 
-
-        cmd = 'umount /etc/resolv.conf'
-        self.docker.execute(container_id,cmd) 
-
-
-        cmd = '/bin/sh -c "ip link set {0} up"'.format(vif_ns_array[0])
-        self.docker.execute(container_id,cmd) 
-        cmd = '/bin/sh -c "dhclient {0}"'.format(vif_ns_array[0])
-        self.docker.execute(container_id,cmd) 
-
-        cmd = '/bin/sh -c "ip link set {0} up"'.format(vif_ns_array[1])
-        self.docker.execute(container_id,cmd) 
-        cmd = '/bin/sh -c "dhclient {0}"'.format(vif_ns_array[1])
-        self.docker.execute(container_id,cmd) 
+            self.vif_driver.attach(instance, vif, container_id, vif_counter)
+            #vif_ns_array.append('ns%s' % vif['id'][:8])
+            vif_counter = vif_counter + 1
 
     def unplug_vifs(self, instance, network_info):
         """Unplug VIFs from networks."""
